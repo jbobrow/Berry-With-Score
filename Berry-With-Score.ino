@@ -1,10 +1,13 @@
 /*
- *  Berry
+ *  Berry w/ Score Hinting
  *  by VV Studio
  *  at IndieCade East 2018 Game Jam
  *  Lead development by Jonathan Bobrow, Move38 Inc.
  *  original game by ViVi and Vanilla
  *
+ *  Remixed 11.21.2020
+ *  by Jonathan Bobrow
+ *  
  *  Rules: https://github.com/Move38/Berry/blob/master/README.md
  *
  *  --------------------
@@ -20,6 +23,7 @@ Color colors[] = { BLUE, RED, YELLOW };
 byte currentColorIndex = 0;
 byte faceIndex = 0;
 byte faceStartIndex = 0;
+//byte localScore = 0;
 
 bool isWaiting = false;
 
@@ -85,17 +89,119 @@ void loop() {
     byte face = (faceStartIndex + faceIndex - 1) % FACE_COUNT;
     setFaceColor( face, colors[nextColorIndex] );
   }
+
+  // display the score, write over current display
+  byte score = calculateGlobalPointValue();
+
+  setColor(dim(colors[currentColorIndex],128));  // set the background to dim of the color
+  FOREACH_FACE(f) {
+    if(f < score) {
+      setColorOnFace(colors[currentColorIndex],f);  // number of bright color for the score
+    }
+  }
+
+  // Communications for scoring
+  byte localScore = calculateLocalPointValue();
+  byte data = (localScore << 2) + currentColorIndex;
+  setValueSentOnAllFaces(data);
 }
 
+byte calculateGlobalPointValue() {
+  // check neighbors for highest score, if my score is the highest, keep that
+  byte highScore = 0;
+  
+  FOREACH_FACE(f) {
+    if(!isValueReceivedOnFaceExpired(f)) {
+      byte neighborData = getLastValueReceivedOnFace(f);
+      
+      if(isMyColor(neighborData)) {
+        byte score = getNeighborScore(neighborData);
+
+        if(score > highScore ) {
+          highScore = score;
+        }
+      }
+    }
+  }
+  byte localScore = calculateLocalPointValue();
+  if( localScore > highScore ) {
+    highScore = localScore;
+  }
+
+  return highScore;
+}
+
+/*
+ * Return the value
+ */
+byte calculateLocalPointValue() {
+  byte score = 0;
+  
+  // get neighbor pattern of my color
+  bool neighborIsMyColor[] = {0,0,0,0,0,0};
+  FOREACH_FACE(f) {
+    if(!isValueReceivedOnFaceExpired(f)) {
+      if(isMyColor(getLastValueReceivedOnFace(f))) {
+        neighborIsMyColor[f] = true;
+      }
+    }
+  }
+
+  bool bowtie[6] = {1,1,0,1,1,0};
+  bool triangle[6] = {1,1,0,0,0,0};
+  bool three[6] = {1,1,1,1,0,0};
+  bool diamond[6] = {1,1,1,0,0,0};
+  bool flower[6] = {1,1,1,1,1,0};
+  
+  // if 2 of my neighbors are my color, 1 point
+  if(isThisPatternPresent( triangle, neighborIsMyColor)) {
+    score = 1;
+  }
+  // if 3 of my adjacent neighbors are my color, 2 points
+  if(isThisPatternPresent( diamond, neighborIsMyColor)) {
+    score = 2;
+  }
+  // if 4 of my neighbors (2 + 2) are my color, 2 points
+  if(isThisPatternPresent( bowtie, neighborIsMyColor)) {
+    score = 2;
+  }
+  // if 4 of my adjacent neighbors are my color, 3 points
+  if(isThisPatternPresent( three, neighborIsMyColor)) {
+    score = 3;
+  }
+  // if 5 of my adjacent neighbors are my color, 10 points WIN
+  if(isThisPatternPresent( flower, neighborIsMyColor)) {
+    score = 6;
+  }
+  
+  return score;
+}
+
+/*
+ * Extract my neighbor's score from the comms data
+ */
+byte getNeighborScore(byte data) {
+  return (data >> 2);
+}
+
+/*
+ * Determine if the neighboring Blink is my color
+ */
+bool isMyColor(byte data) {
+  return (data & 3) == currentColorIndex;
+}
+
+/*
+ * Determine if a piece is in a locked position
+ * If a piece is in this kind of location, determined 
+ * by the pattern of surrounding Blinks, it cannot
+ * legally be moved.
+ */
+bool isPositionLocked() {
+  // based on the arrangement of neighbors, am I locked...
   bool neighborPattern[6];
   bool lockedA[6] = {1, 0, 1, 0, 1, 0};
   bool lockedB[6] = {1, 0, 1, 0, 0, 0};
-  
-bool isPositionLocked() {
-  // based on the arrangement of neighbors, am I locked...
-//  bool neighborPattern[6];
-//  bool lockedA[6] = {1, 0, 1, 0, 1, 0};
-//  bool lockedB[6] = {1, 0, 1, 0, 0, 0};
 
   FOREACH_FACE(f) {
     neighborPattern[f] = !isValueReceivedOnFaceExpired(f);
