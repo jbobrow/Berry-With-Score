@@ -31,7 +31,6 @@ bool isWaiting = false;
 #define WAIT_DURATION 2000
 
 Timer faceTimer;
-Timer waitTimer;
 
 // SYNCHRONY
 Timer syncTimer;
@@ -69,8 +68,7 @@ void loop() {
 
       if (faceIndex >= 7) {
         faceIndex = 0;
-//        waitTimer.set( WAIT_DURATION );
-
+        
         // shift the starting point
         faceStartIndex++;
         if (faceStartIndex >= 6) {
@@ -103,16 +101,6 @@ void loop() {
     byte face = (faceStartIndex + faceIndex - 1) % FACE_COUNT;
     setFaceColor( face, colors[nextColorIndex] );
   }
-
-  // display the score, write over current display
-//  byte score = calculateGlobalPointValue();
-//
-//  setColor(dim(colors[currentColorIndex],128));  // set the background to dim of the color
-//  FOREACH_FACE(f) {
-//    if(f < score) {
-//      setColorOnFace(colors[currentColorIndex],f);  // number of bright color for the score
-//    }
-//  }
 
   // display score
   displayScore();
