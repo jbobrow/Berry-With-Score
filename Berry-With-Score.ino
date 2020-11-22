@@ -33,6 +33,16 @@ bool isWaiting = false;
 Timer faceTimer;
 Timer waitTimer;
 
+// SYNCHRONY
+Timer syncTimer;
+#define PERIOD_DURATION 3000
+#define BUFFER_DURATION 200
+byte neighborState[6];
+byte syncVal = 0;
+
+Timer scoreTimer;
+#define SCORE_PULSE_DURATION 300
+
 void setup() {
   // put your setup code here, to run once:
 
@@ -51,15 +61,15 @@ void loop() {
 
   }
 
-  if ( waitTimer.isExpired() ) {
+  if ( syncTimer.getRemaining() >= 2000 && syncTimer.getRemaining() <= 2370 ) {
+    isWaiting = false;
     if ( faceTimer.isExpired() ) {
       faceTimer.set( FACE_DURATION );
       faceIndex++;
 
       if (faceIndex >= 7) {
         faceIndex = 0;
-        waitTimer.set( WAIT_DURATION );
-        isWaiting = true;
+//        waitTimer.set( WAIT_DURATION );
 
         // shift the starting point
         faceStartIndex++;
@@ -67,21 +77,25 @@ void loop() {
           faceStartIndex = 0;
         }
       }
-      else {
-        isWaiting  = false;
-      }
     }
   }
+  else {
+    isWaiting = true;
+  }
+
+
+  // sync the signaling for points
+  syncLoop();
 
   // display color
   setColor( colors[currentColorIndex] );
 
   // show locked sides
-  if (isPositionLocked()) {
-    // show the state of locked animation on all faces
-    byte bri = 153 + (sin8_C((millis() / 6) % 255)*2)/5;
-    setColor(dim(colors[currentColorIndex], bri));
-  }
+//  if (isPositionLocked()) {
+//    // show the state of locked animation on all faces
+//    byte bri = 153 + (sin8_C((millis() / 6) % 255)*2)/5;
+//    setColor(dim(colors[currentColorIndex], bri));
+//  }
 
   // show next color
   if (!isWaiting) {
@@ -91,20 +105,90 @@ void loop() {
   }
 
   // display the score, write over current display
-  byte score = calculateGlobalPointValue();
+//  byte score = calculateGlobalPointValue();
+//
+//  setColor(dim(colors[currentColorIndex],128));  // set the background to dim of the color
+//  FOREACH_FACE(f) {
+//    if(f < score) {
+//      setColorOnFace(colors[currentColorIndex],f);  // number of bright color for the score
+//    }
+//  }
 
-  setColor(dim(colors[currentColorIndex],128));  // set the background to dim of the color
-  FOREACH_FACE(f) {
-    if(f < score) {
-      setColorOnFace(colors[currentColorIndex],f);  // number of bright color for the score
-    }
-  }
+  // display score
+  displayScore();
+
 
   // Communications for scoring
   byte localScore = calculateLocalPointValue();
-  byte data = (localScore << 2) + currentColorIndex;
+  byte data = (syncVal << 5) + (localScore << 2) + currentColorIndex;
   setValueSentOnAllFaces(data);
 }
+
+/*
+ * 
+ */
+void displayScore() {
+
+  byte score = calculateGlobalPointValue();
+
+  // if the score is 1 point, dim in sync on the faces connected to same colors
+  // if the score is 2 points, dim in sync on the faces connected to same colors
+  // if the score is 2 bowtie style, dim on the middle piece?
+  // if the score is 3 points, dim on the one surrounded by 4 pieces
+  if(score == 3) {
+    if((syncTimer.getRemaining() >= 0 && syncTimer.getRemaining() <= 300) ||
+       (syncTimer.getRemaining() >= 600 && syncTimer.getRemaining() <= 900) ||
+       (syncTimer.getRemaining() >= 1200 && syncTimer.getRemaining() <= 1500))  {
+  
+      FOREACH_FACE(f) {
+        if(!isValueReceivedOnFaceExpired(f)) {
+          byte neighborData = getLastValueReceivedOnFace(f);
+          
+          if(isMyColor(neighborData)) {
+            // dim on this face
+            setColorOnFace(OFF,f);
+          }
+        }
+      }
+      
+    }
+  }
+  else if(score == 2) {
+    if((syncTimer.getRemaining() >= 0 && syncTimer.getRemaining() <= 300) ||
+       (syncTimer.getRemaining() >= 600 && syncTimer.getRemaining() <= 900))  {
+  
+      FOREACH_FACE(f) {
+        if(!isValueReceivedOnFaceExpired(f)) {
+          byte neighborData = getLastValueReceivedOnFace(f);
+          
+          if(isMyColor(neighborData)) {
+            // dim on this face
+            setColorOnFace(OFF,f);
+          }
+        }
+      }
+      
+    }
+  }
+  else if(score == 1) {
+    if((syncTimer.getRemaining() >= 0 && syncTimer.getRemaining() <= 300))  {
+  
+      FOREACH_FACE(f) {
+        if(!isValueReceivedOnFaceExpired(f)) {
+          byte neighborData = getLastValueReceivedOnFace(f);
+          
+          if(isMyColor(neighborData)) {
+            // dim on this face
+            setColorOnFace(OFF,f);
+          }
+        }
+      }
+      
+    }
+  }
+
+}
+
 
 byte calculateGlobalPointValue() {
   // check neighbors for highest score, if my score is the highest, keep that
@@ -178,10 +262,17 @@ byte calculateLocalPointValue() {
 }
 
 /*
+ * Get the shared Sync Value
+ */
+byte getSyncVal(byte data) {
+  return (data >> 5) & 1;  
+}
+
+/*
  * Extract my neighbor's score from the comms data
  */
 byte getNeighborScore(byte data) {
-  return (data >> 2);
+  return (data >> 2) & 7;
 }
 
 /*
@@ -258,4 +349,44 @@ bool isThisPatternPresent( bool pat[], bool source[]) {
   }
 
   return false;
-}  
+}
+
+/*
+   Keep ourselves on the same time loop as our neighbors
+   if a neighbor passed go,
+   we want to pass go as well
+   (if we didn't just pass go)
+   ... or collect $200
+*/
+void syncLoop() {
+
+  bool didNeighborChange = false;
+
+  // look at our neighbors to determine if one of them passed go (changed value)
+  // note: absent neighbors changing to not absent don't count
+  FOREACH_FACE(f) {
+    if (isValueReceivedOnFaceExpired(f)) {
+      neighborState[f] = 2; // this is an absent neighbor
+    }
+    else {
+      byte data = getLastValueReceivedOnFace(f);
+      if (neighborState[f] != 2) {  // wasn't absent
+        if (getSyncVal(data) != neighborState[f]) { // passed go (changed value)
+          didNeighborChange = true;
+        }
+      }
+
+      neighborState[f] = getSyncVal(data);  // update our record of state now that we've check it
+    }
+  }
+
+  // if our neighbor passed go and we haven't done so within the buffer period, catch up and pass go as well
+  // if we are due to pass go, i.e. timer expired, do so
+  if ( (didNeighborChange && syncTimer.getRemaining() < PERIOD_DURATION - BUFFER_DURATION)
+       || syncTimer.isExpired()
+     ) {
+
+    syncTimer.set(PERIOD_DURATION); // aim to pass go in the defined duration
+    syncVal = !syncVal; // change our value everytime we pass go
+  }
+}
